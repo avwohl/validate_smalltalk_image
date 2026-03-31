@@ -1,9 +1,13 @@
 # validate_smalltalk_image
 
-Standalone validator for Spur-format Smalltalk image files. Walks the entire
-heap and checks structural integrity, class table consistency, method validity,
-and more. Reports errors (fatal corruption) and warnings (suspicious but
-non-fatal conditions).
+Standalone validator and export tool for Spur-format Smalltalk image files.
+Walks the entire heap and checks structural integrity, class table consistency,
+method validity, and more. Reports errors (fatal corruption) and warnings
+(suspicious but non-fatal conditions).
+
+Also supports exporting image contents in diff-friendly formats: per-object
+SHA-256 manifests (for change detection), full object catalogs, class hierarchy
+trees, and object reference graphs.
 
 ## Supported Image Formats
 
@@ -13,8 +17,9 @@ non-fatal conditions).
     6521      Spur 32-bit                  Squeak 5.x (32-bit), Cuis 5.x
     6505      Spur 32-bit + Sista V1       (if used)
 
-Also supports iOS-variant tag encoding used by [iospharo](https://github.com/avwohl/iospharo)
-via the `--ios-tags` flag.
+Also supports the iOS-variant immediate tag encoding used by
+[iospharo](https://github.com/avwohl/iospharo) at runtime — see
+[iOS Tag Variant](#ios-tag-variant) below.
 
 ## Building
 
@@ -29,17 +34,34 @@ Requires CMake 3.16+ and a C++17 compiler.
     validate_smalltalk_image [options] <image-file>
 
     Options:
-      --ios-tags       Use iOS tag variant (for iospharo-saved images)
+      --ios-tags       Use iOS tag variant (see below)
       --reachability   Run reachability analysis (finds unreachable objects)
       --json           Output JSON instead of human-readable text
       --verbose        Print findings as they are discovered
       --max-errors N   Stop after N errors (default: unlimited)
       --help           Show help
 
+    Export options (mutually exclusive):
+      --export-shasum      Per-object SHA-256 manifest (for diff)
+      --export-catalog     Full object metadata catalog
+      --export-hierarchy   Class inheritance tree
+      --export-graph       Object reference graph
+
+    Export modifiers:
+      --csv                CSV output (with --export-catalog)
+      --filter-class NAME  Restrict to instances of named class
+      --graph-root OFFSET  Hex offset of subgraph root (with --export-graph)
+      --graph-depth N      Max traversal depth (with --export-graph)
+
     Exit codes:
-      0  No errors (warnings are OK)
+      0  No errors (or export succeeded)
       1  Errors found (image has structural problems)
       2  Usage error
+
+Export output goes to stdout; progress and validation messages go to stderr.
+This lets you pipe or redirect exports cleanly:
+
+    validate_smalltalk_image --export-shasum image.image > shasums.txt
 
 ## Validation Checks
 
@@ -112,6 +134,128 @@ Requires CMake 3.16+ and a C++17 compiler.
     Top 20 classes                Most-instantiated classes by count
     Reachable / unreachable       Object reachability (with --reachability)
 
+## Export Features
+
+### SHA-256 Manifest (`--export-shasum`)
+
+One line per non-free object: heap offset, identity hash, class name, and
+SHA-256 of the object's content bytes. Designed for `diff`:
+
+    validate_smalltalk_image --export-shasum before.image > before.txt
+    # ... run tests in Pharo VM ...
+    validate_smalltalk_image --export-shasum after.image > after.txt
+    diff before.txt after.txt
+
+Output format:
+
+    0000000000000000 0f4d32 UndefinedObject                          b73a37ba...
+    0000000000000010 063372 False                                    59dcf714...
+
+The content hash covers the stable header (classIndex, format, identity hash,
+slot count — excluding mutable GC flags) plus all body bytes. Objects with
+changed content produce different hashes. New or deleted objects appear as
+added or removed lines.
+
+Use `--filter-class NAME` to restrict output to instances of a specific class.
+
+### Object Catalog (`--export-catalog`)
+
+Full metadata for every non-free object. Default output is aligned text;
+use `--json` for JSON or `--csv` for CSV.
+
+    validate_smalltalk_image --export-catalog image.image
+    validate_smalltalk_image --export-catalog --json image.image
+    validate_smalltalk_image --export-catalog --csv image.image
+
+Fields: offset, classIndex, className, format, slots, bytes, identityHash,
+contentHash, flags (immutable, pinned, overflow).
+
+### Class Hierarchy (`--export-hierarchy`)
+
+Prints the full class inheritance tree with method counts and instance
+variable counts. Default is indented text; use `--json` for a flat JSON array.
+
+    validate_smalltalk_image --export-hierarchy image.image
+
+Sample output:
+
+    ProtoObject (classIndex=3129, methods=51, instVars=0)
+      Object (classIndex=3161, methods=446, instVars=0)
+        Collection (classIndex=135, methods=112, instVars=0)
+          ...
+
+### Object Graph (`--export-graph`)
+
+Adjacency list of object references. Each pointer object gets one line showing
+the offsets of all objects it references. Non-pointer objects (bytes, words)
+are omitted since they have no outgoing references.
+
+    validate_smalltalk_image --export-graph image.image
+
+Use `--graph-root OFFSET` and `--graph-depth N` to export a subgraph rooted
+at a specific object:
+
+    validate_smalltalk_image --export-graph --graph-root 1a340 --graph-depth 3 image.image
+
+### Performance
+
+On a 52 MB Pharo 13 image (740K objects):
+
+    --export-shasum:     ~0.7s
+    --export-catalog:    ~0.7s
+    --export-hierarchy:  ~0.4s
+    --export-graph:      ~0.4s (full), varies for subgraphs
+
+## iOS Tag Variant
+
+The `--ios-tags` flag is for validating the **in-memory** representation used
+by [iospharo](https://github.com/avwohl/iospharo), not a separate image file
+format. Saved `.image` files are always standard Spur format, interchangeable
+with any Pharo VM.
+
+### Why different tags?
+
+Standard Spur 64-bit uses single-bit tag positions to distinguish immediates:
+
+    Tag bits   Value   Meaning
+    000        0x0     Object pointer (heap address)
+    001        0x1     SmallInteger
+    010        0x2     Character
+    100        0x4     SmallFloat
+
+On iOS, ASLR can place the heap at arbitrary addresses, so a fast
+"is this an immediate?" check cannot rely on specific high-address patterns.
+iospharo shifts the tag encoding so that **all immediates have bit 0 set**:
+
+    Tag bits   Value   Meaning
+    000        0x0     Object pointer (heap address)
+    001        0x1     SmallInteger
+    011        0x3     Character
+    101        0x5     SmallFloat
+
+This makes the immediate check a single bit test: `(oop & 1) != 0`.
+
+### Image file format is unchanged
+
+iospharo does not define a new image format. The conversion happens at
+load/save time:
+
+  - **Load**: `ImageLoader` reads a standard Spur `.image` and converts
+    standard tags (0x2, 0x4) to iOS tags (0x3, 0x5) as objects enter memory.
+  - **Save**: `ImageWriter` converts iOS tags back to standard tags before
+    writing. The resulting `.image` is byte-identical in format to one saved
+    by the reference Pharo VM.
+
+A freshly downloaded Pharo image has standard tags. A running iospharo process
+has iOS tags in memory. A saved image from iospharo has standard tags again.
+
+### When to use `--ios-tags`
+
+Use `--ios-tags` only if you are validating a **raw memory dump** from a
+running iospharo process (e.g., captured via a debugger). For normal `.image`
+files — whether saved by iospharo or any other Pharo VM — use the default
+(standard) tag mode.
+
 ## How It Works
 
 The validator loads the image file and processes it in phases:
@@ -155,8 +299,12 @@ contains the actual slot count in its low 56 bits.
 
 On a 52 MB Pharo 13 image (740K objects):
 
-    Without reachability:  ~0.3s
+    Validation only:       ~0.3s
     With reachability:     ~0.9s
+    SHA-256 export:        ~0.7s
+    Catalog export:        ~0.7s
+    Hierarchy export:      ~0.4s
+    Graph export:          ~0.4s
 
 ## License
 

@@ -17,6 +17,10 @@ add_executable(validate_smalltalk_image
     src/MethodValidator.cpp
     src/ReachabilityAnalyzer.cpp
     src/Report.cpp
+    src/Sha256.cpp
+    src/ClassNameResolver.cpp
+    src/ObjectHasher.cpp
+    src/ImageExporter.cpp
 )
 
 target_include_directories(validate_smalltalk_image PRIVATE src)
