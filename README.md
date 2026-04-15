@@ -306,6 +306,15 @@ On a 52 MB Pharo 13 image (740K objects):
     Hierarchy export:      ~0.4s
     Graph export:          ~0.4s
 
+## Related
+
+Other repos in this collection:
+
+- **[iospharo](https://github.com/avwohl/iospharo)** — Pharo Smalltalk VM for iOS and Mac Catalyst (interpreter-only, low-bit oop encoding for ASLR compatibility).
+- **[pharo-headless-test](https://github.com/avwohl/pharo-headless-test)** — Headless Pharo test runner with a fake GUI; clicks menus, takes screenshots, runs SUnit without a display.
+- **[soogle](https://github.com/avwohl/soogle)** — Smalltalk code search engine that indexes packages across Pharo, Squeak, GemStone and more.
+- **[claude-skills](https://github.com/avwohl/claude-skills)** — Open source skills for Claude Code: reusable knowledge and algorithms packaged as `.claude/skills/` markdown files.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE).
